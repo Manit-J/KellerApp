@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+import time
 import sounddevice as sd
 import numpy as np
 import wave
@@ -9,12 +9,33 @@ import re
 from groq import Groq
 
 ###############################################################################
-# 1. Check if BSL video for a given word exists on signbsl.com
+# 1. BSL “Simplification” – Remove filler words, e.g. “is”, “are”
+###############################################################################
+def bsl_simplify(text):
+    """
+    Naive removal of certain filler words to mimic (very roughly) BSL grammar.
+    Example: "What is your name?" -> "what your name"
+    """
+    # Define words to remove (expand as needed)
+    filler_words = {"is", "are", "am", "the", "a", "an", "to", "and", "do", "does", "did", "was", "were"}
+
+    # Extract words, lowercase
+    words = re.findall(r"[a-zA-Z']+", text.lower())
+
+    # Filter out filler words
+    filtered = [w for w in words if w not in filler_words]
+
+    # Return them as a space-joined string (for debugging) or list
+    return filtered  # returning as a list for direct usage
+
+###############################################################################
+# 2. Check if BSL video for a given word exists on signbsl.com
 ###############################################################################
 def get_video_url(word, source="signstation"):
     """
     Returns a direct .mp4 URL for the given word if it exists on signbsl.com,
-    or None if not found.
+    or None if not found. Adds a 1-second delay after the HEAD request
+    to reduce risk of looking like a bot.
     """
     base_url = "https://media.signbsl.com/videos/bsl"
     video_url = f"{base_url}/{source}/{word}.mp4"
@@ -23,22 +44,22 @@ def get_video_url(word, source="signstation"):
     response = requests.head(video_url)
     print(f"[DEBUG] HTTP status for '{word}': {response.status_code}")
 
+    # Delay to help avoid 'bot-like' rapid requests
+    time.sleep(1)
+
     if response.status_code == 200:
         return video_url
     else:
         return None
 
 ###############################################################################
-# 2. Get British English synonyms from Groq (LLM) and print them
+# 3. Use Groq LLM to get British English synonyms
 ###############################################################################
 def get_bsl_alternatives_from_groq(client, original_word, max_alternatives=5):
     """
-    Calls the Groq chat/completion endpoint with a text model (e.g., 'llama-3.3-70b-versatile')
-    to get synonyms or alternative words specifically for British usage / BSL.
-    Returns a list of possible word strings (lowercase) and prints them for debugging.
-
-    This now uses dot notation (response.choices[0].message.content)
-    to avoid the 'Choice' object is not subscriptable error.
+    Calls the Groq chat/completion endpoint with a text model
+    (e.g., 'llama-3.3-70b-versatile') to get synonyms or alternative words
+    specifically for British usage / BSL. Returns a list of strings (lowercase).
     """
     prompt = (
         f"We are working with British Sign Language (BSL). The user said '{original_word}', "
@@ -50,7 +71,7 @@ def get_bsl_alternatives_from_groq(client, original_word, max_alternatives=5):
     print(f"[DEBUG] Asking LLM for synonyms of '{original_word}'")
     
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",  # or whichever text model Groq provides
+        model="llama-3.3-70b-versatile",  # or another text model on Groq
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
@@ -66,25 +87,23 @@ def get_bsl_alternatives_from_groq(client, original_word, max_alternatives=5):
         print("[DEBUG] No synonyms returned by the LLM.")
         return []
 
-    # -- FIXED: use dot notation (message.content) instead of subscript:
+    # Use dot notation:
     text_out = response.choices[0].message.content.strip()
 
-    # Parse synonyms (assuming comma-separated)
     possible_words = re.split(r"[,\n]+", text_out)
     possible_words = [w.strip().lower() for w in possible_words if w.strip()]
 
-    # Print synonyms to console
     print(f"[DEBUG] Synonyms for '{original_word}': {possible_words}")
 
     return possible_words[:max_alternatives]
 
 ###############################################################################
-# 3. Main Tkinter Application
+# 4. Main Tkinter Application
 ###############################################################################
 class AudioRecorderApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Audio to BSL Video Finder with Groq")
+        self.root.title("BSL Finder with Groq")
 
         # Recording attributes
         self.recording = False
@@ -93,55 +112,97 @@ class AudioRecorderApp:
         self.filename = "recorded_audio.wav"
 
         # Groq API setup
-        # WARNING: Storing an API key in code is not recommended.
-        # For demonstration only:
-        self.api_key = " "
+        self.api_key = ""  # Replace with your valid key
         self.client = Groq(api_key=self.api_key)
 
-        # --- GUI: Buttons & Results Frame ---
+        # --- GUI ELEMENTS ---
+
+        # Single button to start/stop
         self.record_button = tk.Button(
             root, text="Record", command=self.toggle_recording, width=20
         )
         self.record_button.pack(pady=5)
 
-        self.transcribe_button = tk.Button(
-            root, text="Send to Groq",
-            command=self.transcribe_audio,
-            state=tk.DISABLED,
-            width=20
+        # Flashing label (not shown initially)
+        self.recording_label = tk.Label(
+            root, text="Recording...", fg="red", font=("Arial", 14, "bold")
         )
-        self.transcribe_button.pack(pady=5)
+        # Do NOT pack/place it yet. We will only do so while recording.
 
+        # We'll use a flag to control label flashing
+        self.flashing = False
+
+        # Processing label for during transcription & lookups
+        self.processing_label = tk.Label(
+            root, text="Processing...", fg="blue", font=("Arial", 14, "bold")
+        )
+        # Also hidden by default
+
+        # Results frame
         self.results_frame = tk.Frame(root)
         self.results_frame.pack(pady=10)
 
     # -------------------------------------------------------------------------
-    # Recording Logic
+    # RECORD/STOP LOGIC
     # -------------------------------------------------------------------------
     def toggle_recording(self):
+        """
+        Single-button approach:
+         - If not recording -> start
+         - If currently recording -> stop, automatically transcribe
+        """
         if not self.recording:
             self.start_recording()
         else:
             self.stop_recording()
+            self.transcribe_audio()  # no separate button
 
     def start_recording(self):
         self.recording = True
         self.audio_data = []
-        self.record_button.config(text="Stop Recording")
-        messagebox.showinfo("Recording", "Recording started. Click again to stop.")
+
+        # Change button text
+        self.record_button.config(text="Stop")
+
+        # Show the flashing "Recording..." label
+        self.recording_label.place(x=100, y=50)  # position as needed
+        self.flashing = True
+        self.flash_label()
+
+        print("[DEBUG] Recording started...")
+
+        # Start capturing audio
         self.stream = sd.InputStream(samplerate=self.samplerate, channels=1, callback=self.audio_callback)
         self.stream.start()
 
     def stop_recording(self):
         self.recording = False
         self.record_button.config(text="Record")
+
+        # Stop flashing
+        self.flashing = False
+        self.recording_label.place_forget()
+
+        # Stop audio stream
         self.stream.stop()
         self.stream.close()
-        self.save_audio()
-        self.transcribe_button.config(state=tk.NORMAL)
-        messagebox.showinfo("Recording", f"Recording saved as '{self.filename}'.")
 
-    def audio_callback(self, indata, frames, time, status):
+        # Save to WAV
+        self.save_audio()
+        print(f"[DEBUG] Recording stopped and saved as '{self.filename}'.")
+
+    def flash_label(self):
+        """
+        Toggles the text color of self.recording_label between red and black
+        every 500ms while self.flashing is True.
+        """
+        if self.flashing:
+            current_color = self.recording_label.cget("fg")
+            next_color = "black" if current_color == "red" else "red"
+            self.recording_label.config(fg=next_color)
+            self.root.after(500, self.flash_label)
+
+    def audio_callback(self, indata, frames, time_, status):
         if status:
             print("[DEBUG] Recording status:", status)
         self.audio_data.append(indata.copy())
@@ -155,20 +216,25 @@ class AudioRecorderApp:
             wf.writeframes((data * 32767).astype(np.int16).tobytes())
 
     # -------------------------------------------------------------------------
-    # Transcription + Word Lookup + Synonyms
+    # TRANSCRIPTION & BSL LOOKUP
     # -------------------------------------------------------------------------
     def transcribe_audio(self):
         """
-        1) Transcribes the recorded WAV file using Groq's Whisper-like endpoint.
-           We force the text to lowercase.
-        2) Removes punctuation and splits words.
-        3) For each word, checks signbsl.com. If not found, calls the LLM
-           'llama-3.3-70b-versatile' to suggest up to 5 synonyms in British usage.
-        4) Displays clickable links or a label if none is found.
-        5) Prints debug statements to console, including synonyms.
+        1) Show "Processing..." label
+        2) Transcribe with Groq
+        3) Apply naive BSL simplification (remove filler words)
+        4) For each word, check signbsl.com or synonyms
+        5) Hide "Processing..." label
         """
+        # Show processing label
+        self.processing_label.place(x=100, y=80)
+
+        # Clear old results
+        for widget in self.results_frame.winfo_children():
+            widget.destroy()
+
         try:
-            # --- 1. Transcribe ---
+            # --- 1. Transcribe with Groq ---
             with open(self.filename, "rb") as audio_file:
                 transcription = self.client.audio.transcriptions.create(
                     file=(self.filename, audio_file.read()),
@@ -177,26 +243,18 @@ class AudioRecorderApp:
                     language="en",
                 )
 
-            transcription_text = transcription.text.lower().strip()
-            print(f"[DEBUG] Raw transcription: {transcription_text}")
+            # Force to lowercase & strip
+            raw_text = transcription.text.lower().strip()
+            print(f"[DEBUG] Raw transcription: {raw_text}")
 
-            # --- 2. Clean out punctuation. Example: 'washroom.' -> 'washroom'
-            words = re.findall(r"[a-zA-Z']+", transcription_text)
-            print(f"[DEBUG] Cleaned word list: {words}")
+            # --- 2. Simplify to approximate BSL structure ---
+            # e.g. remove "is", "are", etc.
+            bsl_words = bsl_simplify(raw_text)  
+            print(f"[DEBUG] BSL-simplified words: {bsl_words}")
 
-            # Show a popup with the raw transcription
-            messagebox.showinfo("Transcription", f"Groq Transcription:\n{transcription_text}")
-
-            # Clear old results from results_frame
-            for widget in self.results_frame.winfo_children():
-                widget.destroy()
-
-            # --- 3. For each word, try signbsl. If not found, get synonyms. ---
-            for word in words:
-                if not word:
-                    continue
-
-                print(f"[DEBUG] Looking for BSL sign of '{word}'")
+            # --- 3. Look up each word on signbsl.com or synonyms ---
+            for word in bsl_words:
+                print(f"[DEBUG] Checking word '{word}'...")
                 url = get_video_url(word)
 
                 if url:
@@ -206,7 +264,6 @@ class AudioRecorderApp:
                     print(f"[DEBUG] '{word}' not found. Getting synonyms from LLM...")
                     synonyms = get_bsl_alternatives_from_groq(self.client, word)
 
-                    # Try each synonym
                     found_alternative_url = None
                     used_synonym = None
 
@@ -219,23 +276,19 @@ class AudioRecorderApp:
                             break
 
                     if found_alternative_url:
-                        # Found a workable synonym
                         display_text = f"No sign for '{word}' - using '{used_synonym}'"
                         self._create_video_button(display_text, found_alternative_url)
                     else:
-                        # None of the synonyms worked
-                        lbl = tk.Label(
-                            self.results_frame,
-                            text=f"No BSL video for '{word}' or its synonyms."
-                        )
-                        lbl.pack(anchor="w", pady=2)
+                        msg = f"No BSL video for '{word}' or its synonyms."
+                        tk.Label(self.results_frame, text=msg).pack(anchor="w", pady=2)
 
         except Exception as e:
-            messagebox.showerror("Error", f"An error occurred: {e}")
+            print("[DEBUG] Error:", e)
+            tk.Label(self.results_frame, text=f"Error: {e}", fg="red").pack(anchor="w", pady=2)
 
-    # -------------------------------------------------------------------------
-    # Utility to create a clickable video button
-    # -------------------------------------------------------------------------
+        # Hide processing label
+        self.processing_label.place_forget()
+
     def _create_video_button(self, label_text, url):
         btn = tk.Button(
             self.results_frame,
@@ -245,16 +298,15 @@ class AudioRecorderApp:
         )
         btn.pack(anchor="w", pady=2)
 
-    # -------------------------------------------------------------------------
-    # Utility to open a URL in the default browser
-    # -------------------------------------------------------------------------
     def open_in_browser(self, url):
         webbrowser.open(url)
 
 ###############################################################################
-# 4. Entry Point
+# 5. MAIN
 ###############################################################################
 if __name__ == "__main__":
     root = tk.Tk()
+    root.geometry("400x300")  # Adjust size as desired
+
     app = AudioRecorderApp(root)
     root.mainloop()

@@ -131,142 +131,10 @@ def detect_letter(hand_landmarks):
     #    i.e. (middle, ring, pinky extended) and thumb_index_close
     if thumb_index_close and middle_extended and ring_extended and pinky_extended:
         return "F"
+    
+    if fingers_extended and thumb_extended:
+        return "Hello"
 
-    # G: Like a horizontal "gun": index and thumb extended, others curled
-    #    We'll approximate: index_extended, thumb_extended, middle/ring/pinky curled
-    if index_extended and thumb_extended and (not middle_extended) and (not ring_extended) and (not pinky_extended):
-        return "G"
-
-    # H: Index and middle extended, ring and pinky curled, thumb sort of out of the way
-    #    (similar to "U," but H is often extended sideways)
-    #    We'll do: index_extended, middle_extended, ring/pinky not extended. 
-    #    If we didn't already classify it as "C," call it "H."
-    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
-        # If not recognized as C, let's guess H
-        return "H"
-
-    # I: Pinky extended, other fingers curled (thumb either hugging or out)
-    if pinky_extended and (not index_extended) and (not middle_extended) and (not ring_extended):
-        return "I"
-
-    # J: Like "I" but with a "hook" motion. We cannot detect motion easily, so let's guess
-    #    if pinky extended, others curled, and maybe pinky tip is to the side of pinky MCP.
-    #    This will frequently get confused with "I." 
-    if pinky_extended and (not index_extended) and (not middle_extended) and (not ring_extended):
-        # Let's say if thumb is somewhat close to pinky to guess "J" (naive).
-        if thumb_pinky_close:
-            return "J"
-
-    # K: Index and middle extended, thumb in between them, ring/pinky curled
-    #    We'll approximate that index/middle extended, ring/pinky curled, 
-    #    and thumb is near the middle finger base or extended out
-    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
-        # If thumb is not near index tip but also not totally folded in, guess K
-        # (This is naive and can conflict with "H" or "C.")
-        if not thumb_index_close:
-            return "K"
-
-    # L: Index and thumb extended (forming 'L'), middle/ring/pinky curled
-    if index_extended and (not middle_extended) and (not ring_extended) and (not pinky_extended) and thumb_extended:
-        # We already used that for "D" or "G", but let's see if the angles differ
-        # For L, typically the thumb is perpendicular to the index. We'll guess if they're not very close:
-        if not thumb_index_close:
-            return "L"
-
-    # M: Typically index, middle, ring over thumb, pinky extended or partially extended.
-    #    We'll approximate: 3 fingers curled over thumb, pinky curled or partially. 
-    #    We'll check if index & middle & ring tips are close to thumb tip. 
-    if (thumb_index_close and thumb_middle_close and thumb_ring_close):
-        # If pinky is not extended or just slightly
-        if not pinky_extended:
-            return "M"
-
-    # N: Similar to M but only index & middle over thumb, ring curled or partially extended
-    #    We'll approximate: index & middle tips near thumb, ring not near thumb, pinky curled or not
-    if (thumb_index_close and thumb_middle_close) and (not thumb_ring_close):
-        if not ring_extended:
-            return "N"
-
-    # O: All fingertips together, forming an "O" shape
-    #    i.e. thumb_index_close, thumb_middle_close, thumb_ring_close, thumb_pinky_close
-    if thumb_index_close and thumb_middle_close and thumb_ring_close and thumb_pinky_close:
-        return "O"
-
-    # P: Like "K" but oriented downward. We can't easily check orientation without tilt angles,
-    #    We'll guess that it's "K" shape plus ring finger extended or something that might differentiate it.
-    #    This is extremely naive.
-    if index_extended and middle_extended and thumb_extended and (not ring_extended) and (not pinky_extended):
-        # If ring is slightly extended
-        if ring_mcp.y - ring_tip.y < 0.01:
-            return "P"
-
-    # Q: Like "G" oriented downward. Also naive. 
-    if index_extended and thumb_extended and (not middle_extended) and (not ring_extended) and (not pinky_extended):
-        # If pinky or ring is slightly out, guess Q
-        if ring_extended or pinky_extended:
-            return "Q"
-
-    # R: Index and middle crossed, ring/pinky curled
-    #    We can't easily detect "crossed" with MediaPipe landmarks without angles. We'll guess if both extended.
-    #    Let's do a naive check: index and middle extended, ring/pinky curled, 
-    #    and the x-coordinates of index_tip and middle_tip are close.
-    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
-        if abs(index_tip.x - middle_tip.x) < 0.015:
-            return "R"
-
-    # S: Fist with thumb in front (like a normal fist but thumb outside). 
-    #    We'll guess all curled, but thumb crossing the front.
-    if (num_extended == 0):
-        # If the thumb is near the index/ middle side
-        if (distance(thumb_tip, index_mcp) < 0.04 or thumb_index_close):
-            return "S"
-
-    # T: Fist with thumb between index and middle
-    #    We'll guess all curled, but thumb tip is near the gap between index and middle MCP
-    if (num_extended == 0):
-        # Check distance from thumb to index_mcp and middle_mcp
-        ti = distance(thumb_tip, index_mcp)
-        tm = distance(thumb_tip, middle_mcp)
-        if (ti < 0.04 and tm < 0.04):
-            return "T"
-
-    # U: Index and middle extended together, ring and pinky curled
-    #    We'll guess index_extended, middle_extended, ring/pinky not extended, 
-    #    plus index & middle are close in x to each other
-    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
-        if abs(index_tip.x - middle_tip.x) < 0.03:
-            return "U"
-
-    # V: Index and middle extended (slightly spread), ring and pinky curled
-    #    We'll guess index_extended, middle_extended, ring/pinky not extended,
-    #    but index & middle have some separation.
-    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
-        if abs(index_tip.x - middle_tip.x) >= 0.03:
-            return "V"
-
-    # W: Index, middle, ring extended, pinky curled
-    if index_extended and middle_extended and ring_extended and (not pinky_extended):
-        return "W"
-
-    # X: Index finger bent (like a hook), others curled.
-    #    Hard to detect "bent" with simple y-check, so let's guess: index extended but tip is horizontally near the MCP
-    #    We'll do a naive check on distance between index_tip and index_mcp.
-    if (not middle_extended) and (not ring_extended) and (not pinky_extended):
-        dist_idx = distance(index_tip, index_mcp)
-        # If that distance is small, it might be "hooked"
-        if dist_idx < 0.03:
-            return "X"
-
-    # Y: Thumb and pinky extended, others curled
-    if thumb_extended and pinky_extended and (not index_extended) and (not middle_extended) and (not ring_extended):
-        return "Y"
-
-    # Z: Index draws a 'Z' in the air, but statically let's say index extended, others curled. 
-    #    This can be the same as "D" or "L," so we'll do an extra check: index is extended, thumb is not extended,
-    #    or index tip is far from thumb tip.
-    if index_extended and (not middle_extended) and (not ring_extended) and (not pinky_extended):
-        if not thumb_extended and not thumb_index_close:
-            return "Z"
 
     # If nothing matched, return None
     return None
@@ -569,13 +437,22 @@ def prev_word_and_rerun():
 ###############################################################################
 # 6) Main Streamlit App
 ###############################################################################
+def handle_text_change():
+    user_text = st.session_state["user_text"].strip()
+    if user_text:
+        with st.spinner("Processing text..."):
+            videos = process_text_bsl(client=None, text=user_text)  # Replace `client=None` with the actual client if needed
+        st.session_state["bsl_videos"] = videos
+        st.session_state["bsl_index"] = 0
+        st.success("Generated BSL video items.")
+        
 def main():
     # Set debug flag in session state (default off)
     if "debug" not in st.session_state:
         st.session_state["debug"] = False
 
     # Replace with your actual Groq API key.
-    api_key = ""
+    api_key = "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"
     client = Groq(api_key=api_key)
 
     # Initialize session state for BSL videos and index if needed.
@@ -584,12 +461,14 @@ def main():
     if "bsl_index" not in st.session_state:
         st.session_state["bsl_index"] = 0
 
-    st.sidebar.title("KellerApp")
+    st.sidebar.image("logo.png", width=150)
     # Debug toggle (default off)
-    st.sidebar.checkbox("Show Debug Info", value=st.session_state["debug"], key="debug")
+   
 
     st.sidebar.title("Navigation")
     page = st.sidebar.radio("Go to", ("Camera Translation", "Speech Translation", "Text Translation"))
+    
+    st.sidebar.checkbox("Show Debug Info", value=st.session_state["debug"], key="debug")
 
     # --- Camera Translation Page ---
     if page == "Camera Translation":
@@ -686,13 +565,13 @@ def main():
     else:
         st.header("Text Translation")
         user_text = st.text_area("Enter your text here", placeholder="e.g., 'Hello, what is your name?'")
-        if user_text.strip():
-            if st.button("Convert to BSL Videos"):
-                with st.spinner("Processing text..."):
-                    videos = process_text_bsl(client, user_text)
-                st.session_state["bsl_videos"] = videos
-                st.session_state["bsl_index"] = 0
-                st.success("Generated BSL video items.")
+        
+        if st.button("Convert to BSL Videos"):
+            with st.spinner("Processing text..."):
+                videos = process_text_bsl(client, user_text)
+            st.session_state["bsl_videos"] = videos
+            st.session_state["bsl_index"] = 0
+            st.success("Generated BSL video items.")
 
     # --- Video Carousel Section ---
     st.markdown("---")
@@ -732,9 +611,7 @@ def main():
             st.button("Next Word", on_click=next_word_and_rerun, disabled=(idx == len(videos) - 1))
 
         st.write("Use the buttons above to navigate through the words.")
-        st.markdown("""
-        **Note**: If the same video appears repeatedly, try clearing your browser cache or using Incognito mode.
-        """)
+        
 
 if __name__ == "__main__":
     main()

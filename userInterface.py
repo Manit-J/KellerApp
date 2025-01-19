@@ -47,68 +47,236 @@ wrist_positions = deque(maxlen=20)
 
 def detect_letter(hand_landmarks):
     """
-    A VERY basic, partial rule-based approach to detect some letters (A, B, C, D, E).
-    For a full alphabet, you'd define more conditions or train a custom model.
-    Returns one of {"A", "B", "C", "D", "E"} or None if no match.
+    A naive, rule-based approach to detect all letters A-Z.
+    WARNING: This is extremely approximate and will be very error-prone.
+    Some letters (J, Z) require movement, so we use a static approximation.
     """
-    # Landmarks for fingertips and MCP joints
+
+    # Grab all fingertip (TIP) and MCP landmarks
     thumb_tip = hand_landmarks.landmark[4]
     index_tip = hand_landmarks.landmark[8]
     middle_tip = hand_landmarks.landmark[12]
     ring_tip = hand_landmarks.landmark[16]
     pinky_tip = hand_landmarks.landmark[20]
 
+    thumb_mcp = hand_landmarks.landmark[2]   # "Thumb MCP" is actually landmark #2 in MediaPipe
     index_mcp = hand_landmarks.landmark[5]
     middle_mcp = hand_landmarks.landmark[9]
     ring_mcp = hand_landmarks.landmark[13]
     pinky_mcp = hand_landmarks.landmark[17]
 
-    # A naive approach: consider a finger "extended" if its tip is above (smaller y) its MCP joint.
-    index_extended = index_tip.y < index_mcp.y
-    middle_extended = middle_tip.y < middle_mcp.y
-    ring_extended = ring_tip.y < ring_mcp.y
-    pinky_extended = pinky_tip.y < pinky_mcp.y
+    # A crude check for extension: finger is "extended" if tip.y < mcp.y
+    # (assuming y=0 at top of image and larger y goes downward)
+    index_extended = (index_tip.y < index_mcp.y)
+    middle_extended = (middle_tip.y < middle_mcp.y)
+    ring_extended = (ring_tip.y < ring_mcp.y)
+    pinky_extended = (pinky_tip.y < pinky_mcp.y)
 
-    # For letter "A": All fingers are curled; thumb stays near index base.
-    all_fingers_curled = (not index_extended and not middle_extended and not ring_extended and not pinky_extended)
-    thumb_near_index_base = abs(thumb_tip.y - index_mcp.y) < 0.05
-    if all_fingers_curled and (not thumb_near_index_base):
+    # Similarly, a naive thumb "extension" check:
+    thumb_extended = (thumb_tip.x < thumb_mcp.x) if (thumb_mcp.x < index_mcp.x) else (thumb_tip.x > thumb_mcp.x)
+
+    # We'll also check approximate distances to see if fingers are "touching".
+    def distance(a, b):
+        return ((a.x - b.x)**2 + (a.y - b.y)**2 + (a.z - b.z)**2) ** 0.5
+
+    thumb_index_dist = distance(thumb_tip, index_tip)
+    thumb_middle_dist = distance(thumb_tip, middle_tip)
+    thumb_ring_dist   = distance(thumb_tip, ring_tip)
+    thumb_pinky_dist  = distance(thumb_tip, pinky_tip)
+
+    # Check if fingers are *very* close (forming a pinch or circle).
+    # Adjust threshold as needed.
+    thumb_index_close = (thumb_index_dist < 0.03)
+    thumb_middle_close = (thumb_middle_dist < 0.03)
+    thumb_ring_close = (thumb_ring_dist < 0.03)
+    thumb_pinky_close = (thumb_pinky_dist < 0.03)
+
+    # For grouping logic, let's gather booleans for "extended" status
+    fingers_extended = [index_extended, middle_extended, ring_extended, pinky_extended]
+    num_extended = sum(fingers_extended)
+
+    # ============ Start naive letter heuristics ============
+
+    # A: All fingers curled, thumb alongside index (not close to index base).
+    #    We'll approximate: no fingers extended, thumb not super close to index tip.
+    if (num_extended == 0) and not thumb_index_close:
         return "A"
 
-    # For letter "B": All four fingers extended.
-    if index_extended and middle_extended and ring_extended and pinky_extended and thumb_near_index_base:
-        return "B"
+    # B: All four fingers extended, thumb across the palm (close to index base).
+    #    We'll approximate: index, middle, ring, pinky all extended, thumb close to index MCP or tip.
+    if (num_extended == 4):
+        # Check if thumb is near index_mcp or index_tip
+        if distance(thumb_tip, index_mcp) < 0.05 or thumb_index_close:
+            return "B"
 
-    # For letter "C": As an approximation, if index and middle are extended but ring and pinky are not.
+    # C: Index & middle extended, ring & pinky curled, forming a rough "C" shape
+    #    We'll just do index/middle extended, ring/pinky not extended.
     if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
+        # If the thumb is somewhat out (to help form a "C"), we won't require it close to any fingertip
         return "C"
 
-    # For letter "D": Index finger extended; other fingers curled.
+    # D: Index finger extended, other fingers curled, thumb touches middle finger or is off to the side
     if index_extended and (not middle_extended) and (not ring_extended) and (not pinky_extended):
-        # A rough check for thumb position (naively if thumb tip is to the left of index MCP for a right-hand)
-        if thumb_tip.x < index_mcp.x:
-            return "D"
+        # If thumb is to the left of index MCP (right hand assumption) or to the right (left hand)
+        return "D"
 
-    # For letter "E": All fingers curled but thumb is not close to the index base.
-    if all_fingers_curled and thumb_near_index_base:
-        return "E"
-    
-     # For letter "E": All fingers curled but thumb is not close to the index base.
-    if  index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
-        return "K"
-    
-     # For letter "E": All fingers curled but thumb is not close to the index base.
-    if  index_extended and middle_extended and ring_extended and pinky_extended and (not thumb_near_index_base):
-        return "HELLO"
+    # E: All fingers curled, thumb crossing or touching side
+    #    We'll treat it as all curled (0 extended), but thumb near index base or tip
+    if (num_extended == 0):
+        # if thumb is near the index base or index tip
+        if distance(thumb_tip, index_mcp) < 0.05 or thumb_index_close:
+            return "E"
 
+    # F: Thumb and index finger form a circle (touching), other 3 fingers extended
+    #    i.e. (middle, ring, pinky extended) and thumb_index_close
+    if thumb_index_close and middle_extended and ring_extended and pinky_extended:
+        return "F"
+
+    # G: Like a horizontal "gun": index and thumb extended, others curled
+    #    We'll approximate: index_extended, thumb_extended, middle/ring/pinky curled
+    if index_extended and thumb_extended and (not middle_extended) and (not ring_extended) and (not pinky_extended):
+        return "G"
+
+    # H: Index and middle extended, ring and pinky curled, thumb sort of out of the way
+    #    (similar to "U," but H is often extended sideways)
+    #    We'll do: index_extended, middle_extended, ring/pinky not extended. 
+    #    If we didn't already classify it as "C," call it "H."
+    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
+        # If not recognized as C, let's guess H
+        return "H"
+
+    # I: Pinky extended, other fingers curled (thumb either hugging or out)
+    if pinky_extended and (not index_extended) and (not middle_extended) and (not ring_extended):
+        return "I"
+
+    # J: Like "I" but with a "hook" motion. We cannot detect motion easily, so let's guess
+    #    if pinky extended, others curled, and maybe pinky tip is to the side of pinky MCP.
+    #    This will frequently get confused with "I." 
+    if pinky_extended and (not index_extended) and (not middle_extended) and (not ring_extended):
+        # Let's say if thumb is somewhat close to pinky to guess "J" (naive).
+        if thumb_pinky_close:
+            return "J"
+
+    # K: Index and middle extended, thumb in between them, ring/pinky curled
+    #    We'll approximate that index/middle extended, ring/pinky curled, 
+    #    and thumb is near the middle finger base or extended out
+    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
+        # If thumb is not near index tip but also not totally folded in, guess K
+        # (This is naive and can conflict with "H" or "C.")
+        if not thumb_index_close:
+            return "K"
+
+    # L: Index and thumb extended (forming 'L'), middle/ring/pinky curled
+    if index_extended and (not middle_extended) and (not ring_extended) and (not pinky_extended) and thumb_extended:
+        # We already used that for "D" or "G", but let's see if the angles differ
+        # For L, typically the thumb is perpendicular to the index. We'll guess if they're not very close:
+        if not thumb_index_close:
+            return "L"
+
+    # M: Typically index, middle, ring over thumb, pinky extended or partially extended.
+    #    We'll approximate: 3 fingers curled over thumb, pinky curled or partially. 
+    #    We'll check if index & middle & ring tips are close to thumb tip. 
+    if (thumb_index_close and thumb_middle_close and thumb_ring_close):
+        # If pinky is not extended or just slightly
+        if not pinky_extended:
+            return "M"
+
+    # N: Similar to M but only index & middle over thumb, ring curled or partially extended
+    #    We'll approximate: index & middle tips near thumb, ring not near thumb, pinky curled or not
+    if (thumb_index_close and thumb_middle_close) and (not thumb_ring_close):
+        if not ring_extended:
+            return "N"
+
+    # O: All fingertips together, forming an "O" shape
+    #    i.e. thumb_index_close, thumb_middle_close, thumb_ring_close, thumb_pinky_close
+    if thumb_index_close and thumb_middle_close and thumb_ring_close and thumb_pinky_close:
+        return "O"
+
+    # P: Like "K" but oriented downward. We can't easily check orientation without tilt angles,
+    #    We'll guess that it's "K" shape plus ring finger extended or something that might differentiate it.
+    #    This is extremely naive.
+    if index_extended and middle_extended and thumb_extended and (not ring_extended) and (not pinky_extended):
+        # If ring is slightly extended
+        if ring_mcp.y - ring_tip.y < 0.01:
+            return "P"
+
+    # Q: Like "G" oriented downward. Also naive. 
+    if index_extended and thumb_extended and (not middle_extended) and (not ring_extended) and (not pinky_extended):
+        # If pinky or ring is slightly out, guess Q
+        if ring_extended or pinky_extended:
+            return "Q"
+
+    # R: Index and middle crossed, ring/pinky curled
+    #    We can't easily detect "crossed" with MediaPipe landmarks without angles. We'll guess if both extended.
+    #    Let's do a naive check: index and middle extended, ring/pinky curled, 
+    #    and the x-coordinates of index_tip and middle_tip are close.
+    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
+        if abs(index_tip.x - middle_tip.x) < 0.015:
+            return "R"
+
+    # S: Fist with thumb in front (like a normal fist but thumb outside). 
+    #    We'll guess all curled, but thumb crossing the front.
+    if (num_extended == 0):
+        # If the thumb is near the index/ middle side
+        if (distance(thumb_tip, index_mcp) < 0.04 or thumb_index_close):
+            return "S"
+
+    # T: Fist with thumb between index and middle
+    #    We'll guess all curled, but thumb tip is near the gap between index and middle MCP
+    if (num_extended == 0):
+        # Check distance from thumb to index_mcp and middle_mcp
+        ti = distance(thumb_tip, index_mcp)
+        tm = distance(thumb_tip, middle_mcp)
+        if (ti < 0.04 and tm < 0.04):
+            return "T"
+
+    # U: Index and middle extended together, ring and pinky curled
+    #    We'll guess index_extended, middle_extended, ring/pinky not extended, 
+    #    plus index & middle are close in x to each other
+    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
+        if abs(index_tip.x - middle_tip.x) < 0.03:
+            return "U"
+
+    # V: Index and middle extended (slightly spread), ring and pinky curled
+    #    We'll guess index_extended, middle_extended, ring/pinky not extended,
+    #    but index & middle have some separation.
+    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
+        if abs(index_tip.x - middle_tip.x) >= 0.03:
+            return "V"
+
+    # W: Index, middle, ring extended, pinky curled
+    if index_extended and middle_extended and ring_extended and (not pinky_extended):
+        return "W"
+
+    # X: Index finger bent (like a hook), others curled.
+    #    Hard to detect "bent" with simple y-check, so let's guess: index extended but tip is horizontally near the MCP
+    #    We'll do a naive check on distance between index_tip and index_mcp.
+    if (not middle_extended) and (not ring_extended) and (not pinky_extended):
+        dist_idx = distance(index_tip, index_mcp)
+        # If that distance is small, it might be "hooked"
+        if dist_idx < 0.03:
+            return "X"
+
+    # Y: Thumb and pinky extended, others curled
+    if thumb_extended and pinky_extended and (not index_extended) and (not middle_extended) and (not ring_extended):
+        return "Y"
+
+    # Z: Index draws a 'Z' in the air, but statically let's say index extended, others curled. 
+    #    This can be the same as "D" or "L," so we'll do an extra check: index is extended, thumb is not extended,
+    #    or index tip is far from thumb tip.
+    if index_extended and (not middle_extended) and (not ring_extended) and (not pinky_extended):
+        if not thumb_extended and not thumb_index_close:
+            return "Z"
+
+    # If nothing matched, return None
     return None
+
 
 def recognize_gesture(hand_landmarks, handedness, sequence_state):
     """
-    1) Try to detect a letter (A, B, C, D, or E) using detect_letter().
-    2) If no letter is detected, fallback to the existing gestures:
-       "How" (thumb and fingers curved), "You" (index pointing),
-       and a wave (detected as "Hello!").
+    1) Try to detect a letter (A-Z) using detect_letter().
+    2) If no letter is detected, fallback to existing gestures:
+       "How", "You", and wave ("Hello!").
     3) Return the detected letter, gesture, or "Unknown".
     """
     # First, try to detect a letter.
@@ -116,7 +284,7 @@ def recognize_gesture(hand_landmarks, handedness, sequence_state):
     if letter is not None:
         return letter
 
-    # Fallback to existing gesture detection.
+    # -- Fallback to existing gestures detection --
     thumb_tip = hand_landmarks.landmark[4]
     index_tip = hand_landmarks.landmark[8]
     middle_tip = hand_landmarks.landmark[12]
@@ -130,11 +298,14 @@ def recognize_gesture(hand_landmarks, handedness, sequence_state):
     # "How" gesture: thumb and all fingers curved.
     thumb_curved = thumb_tip.y > wrist.y and thumb_tip.x > index_tip.x
     fingers_curved = all(tip.y > wrist.y for tip in [index_tip, middle_tip, ring_tip, pinky_tip])
-    # "You" gesture: index finger pointing.
-    is_pointing = (index_tip.y < middle_tip.y and
-                   index_tip.y < ring_tip.y and
-                   index_tip.y < pinky_tip.y and
-                   abs(index_tip.x - thumb_tip.x) > 0.1)
+
+    # "You" gesture: index finger pointing (index is extended, others not)
+    is_pointing = (
+        index_tip.y < middle_tip.y and
+        index_tip.y < ring_tip.y and
+        index_tip.y < pinky_tip.y and
+        abs(index_tip.x - thumb_tip.x) > 0.1
+    )
 
     # Detect wave for "Hello!"
     if len(wrist_positions) >= 5:
@@ -143,6 +314,7 @@ def recognize_gesture(hand_landmarks, handedness, sequence_state):
         for i in range(1, len(wrist_positions)):
             movement = abs(wrist_positions[i] - wrist_positions[i - 1])
             total_movement += movement
+            # check if direction changed
             if i > 1 and (wrist_positions[i] - wrist_positions[i - 1]) * (wrist_positions[i - 1] - wrist_positions[i - 2]) < 0:
                 direction_changes += 1
         if direction_changes >= 4 and total_movement >= 0.2:
@@ -156,10 +328,11 @@ def recognize_gesture(hand_landmarks, handedness, sequence_state):
         return "You"
     return "Unknown"
 
+
 def run_realtime_detection():
     """
     Runs a loop to capture video from your webcam,
-    detects letters (A-E) or gestures ("How", "You", "Hello!") using Mediapipe,
+    detects letters (A-Z) or gestures ("How", "You", "Hello!") using MediaPipe,
     and shows the frames in Streamlit.
     Press the 'Stop Gesture Detection' button to end.
     """
@@ -174,7 +347,6 @@ def run_realtime_detection():
     last_gesture_time = 0.0
     display_duration = 3.0  # seconds to display the last recognized gesture
 
-    gesture_sequence = deque(maxlen=5)
     sequence_state = None
 
     st.write("**Real-time gesture detection running...**")
@@ -202,20 +374,22 @@ def run_realtime_detection():
 
                 gesture = recognize_gesture(hand_landmarks, handedness, sequence_state)
                 if gesture != "Unknown":
+                    # If gesture changed, update last_gesture
                     if gesture != last_gesture:
                         last_gesture = gesture
                         last_gesture_time = time.time()
 
+                    # Simple "How are you?" sequence
                     if gesture == "How":
                         sequence_state = "How"
                     elif sequence_state == "How" and gesture == "You":
                         last_gesture = "How are you?"
                         last_gesture_time = time.time()
                         sequence_state = None
-                        gesture_sequence.clear()
                     elif gesture == "Hello!":
                         sequence_state = None
 
+        # Display the last recognized gesture/letter on screen for a few seconds
         if last_gesture and (time.time() - last_gesture_time < display_duration):
             cv2.putText(
                 frame,

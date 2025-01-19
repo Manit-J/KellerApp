@@ -347,7 +347,7 @@ def main():
         st.session_state["debug"] = False
 
     # Replace with your actual Groq API key.
-    api_key = "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"
+    api_key = "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"
     client = Groq(api_key=api_key)
 
     # Initialize session state for BSL videos and index if needed.
@@ -367,8 +367,8 @@ def main():
         st.header("Camera Translation")
 
         # Button to start real-time detection
-       # if st.button("Start Real-time Gesture Detection"):
-        run_realtime_detection()
+        if st.button("Start Real-time Gesture Detection"):
+            run_realtime_detection()
 
         # # Existing single-image approach (unchanged)
         # st.write("Or capture a snapshot using your device camera:")
@@ -378,6 +378,24 @@ def main():
         #     st.image(image, caption="Captured Image", use_column_width=True)
         #     st.success("Detected gesture: (placeholder)")
         
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
         st.write(" ")
         st.write(" ")
         st.write(" ")
@@ -450,6 +468,8 @@ def main():
     # --- Video Carousel Section ---
     st.markdown("---")
     st.header("Video Carousel")
+    st.markdown("All videos have been retrieved from: [SignBSL](https://www.signbsl.com/)")
+
     st.write("Navigate through each word's BSL video:")
 
     videos = st.session_state.get("bsl_videos", [])
@@ -472,7 +492,7 @@ def main():
             final_url = f"{url}?nocache={unique_param}"
             if st.session_state.get("debug"):
                 st.write("[DEBUG] Final video URL:", final_url)
-            st.video(final_url, format="video/mp4")
+            st.video(final_url, format="video/mp4", loop=True, autoplay=True)
         else:
             st.error(f"No BSL video available for '{word}'.")
 

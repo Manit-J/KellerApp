@@ -377,6 +377,28 @@ def main():
             image = Image.open(camera_image)
             st.image(image, caption="Captured Image", use_column_width=True)
             st.success("Detected gesture: (placeholder)")
+        
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
+        st.write(" ")
 
     # --- Speech Translation Page ---
     elif page == "Speech Translation":

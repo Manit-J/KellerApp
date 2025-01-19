@@ -76,7 +76,7 @@ def detect_letter(hand_landmarks):
         return "A"
 
     # For letter "B": All four fingers extended.
-    if index_extended and middle_extended and ring_extended and pinky_extended:
+    if index_extended and middle_extended and ring_extended and pinky_extended and thumb_near_index_base:
         return "B"
 
     # For letter "C": As an approximation, if index and middle are extended but ring and pinky are not.
@@ -92,6 +92,14 @@ def detect_letter(hand_landmarks):
     # For letter "E": All fingers curled but thumb is not close to the index base.
     if all_fingers_curled and thumb_near_index_base:
         return "E"
+    
+     # For letter "E": All fingers curled but thumb is not close to the index base.
+    if  index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
+        return "K"
+    
+     # For letter "E": All fingers curled but thumb is not close to the index base.
+    if  index_extended and middle_extended and ring_extended and pinky_extended and (not thumb_near_index_base):
+        return "HELLO"
 
     return None
 
@@ -393,7 +401,7 @@ def main():
         st.session_state["debug"] = False
 
     # Replace with your actual Groq API key.
-    api_key = "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"
+    api_key = ""
     client = Groq(api_key=api_key)
 
     # Initialize session state for BSL videos and index if needed.
@@ -402,6 +410,7 @@ def main():
     if "bsl_index" not in st.session_state:
         st.session_state["bsl_index"] = 0
 
+    st.sidebar.title("KellerApp")
     # Debug toggle (default off)
     st.sidebar.checkbox("Show Debug Info", value=st.session_state["debug"], key="debug")
 

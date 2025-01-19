@@ -32,7 +32,7 @@ st.markdown(
 )
 
 ###############################################################################
-# Mediapipe Setup for Real-Time Gesture Detection
+# Mediapipe Setup for Real-Time Gesture Detection (with Letter Detection)
 ###############################################################################
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
@@ -45,8 +45,70 @@ mp_drawing = mp.solutions.drawing_utils
 # For wave detection, track wrist positions
 wrist_positions = deque(maxlen=20)
 
+def detect_letter(hand_landmarks):
+    """
+    A VERY basic, partial rule-based approach to detect some letters (A, B, C, D, E).
+    For a full alphabet, you'd define more conditions or train a custom model.
+    Returns one of {"A", "B", "C", "D", "E"} or None if no match.
+    """
+    # Landmarks for fingertips and MCP joints
+    thumb_tip = hand_landmarks.landmark[4]
+    index_tip = hand_landmarks.landmark[8]
+    middle_tip = hand_landmarks.landmark[12]
+    ring_tip = hand_landmarks.landmark[16]
+    pinky_tip = hand_landmarks.landmark[20]
+
+    index_mcp = hand_landmarks.landmark[5]
+    middle_mcp = hand_landmarks.landmark[9]
+    ring_mcp = hand_landmarks.landmark[13]
+    pinky_mcp = hand_landmarks.landmark[17]
+
+    # A naive approach: consider a finger "extended" if its tip is above (smaller y) its MCP joint.
+    index_extended = index_tip.y < index_mcp.y
+    middle_extended = middle_tip.y < middle_mcp.y
+    ring_extended = ring_tip.y < ring_mcp.y
+    pinky_extended = pinky_tip.y < pinky_mcp.y
+
+    # For letter "A": All fingers are curled; thumb stays near index base.
+    all_fingers_curled = (not index_extended and not middle_extended and not ring_extended and not pinky_extended)
+    thumb_near_index_base = abs(thumb_tip.y - index_mcp.y) < 0.05
+    if all_fingers_curled and (not thumb_near_index_base):
+        return "A"
+
+    # For letter "B": All four fingers extended.
+    if index_extended and middle_extended and ring_extended and pinky_extended:
+        return "B"
+
+    # For letter "C": As an approximation, if index and middle are extended but ring and pinky are not.
+    if index_extended and middle_extended and (not ring_extended) and (not pinky_extended):
+        return "C"
+
+    # For letter "D": Index finger extended; other fingers curled.
+    if index_extended and (not middle_extended) and (not ring_extended) and (not pinky_extended):
+        # A rough check for thumb position (naively if thumb tip is to the left of index MCP for a right-hand)
+        if thumb_tip.x < index_mcp.x:
+            return "D"
+
+    # For letter "E": All fingers curled but thumb is not close to the index base.
+    if all_fingers_curled and thumb_near_index_base:
+        return "E"
+
+    return None
+
 def recognize_gesture(hand_landmarks, handedness, sequence_state):
-    # Extract key landmarks
+    """
+    1) Try to detect a letter (A, B, C, D, or E) using detect_letter().
+    2) If no letter is detected, fallback to the existing gestures:
+       "How" (thumb and fingers curved), "You" (index pointing),
+       and a wave (detected as "Hello!").
+    3) Return the detected letter, gesture, or "Unknown".
+    """
+    # First, try to detect a letter.
+    letter = detect_letter(hand_landmarks)
+    if letter is not None:
+        return letter
+
+    # Fallback to existing gesture detection.
     thumb_tip = hand_landmarks.landmark[4]
     index_tip = hand_landmarks.landmark[8]
     middle_tip = hand_landmarks.landmark[12]
@@ -54,23 +116,19 @@ def recognize_gesture(hand_landmarks, handedness, sequence_state):
     pinky_tip = hand_landmarks.landmark[20]
     wrist = hand_landmarks.landmark[0]
 
-    # Track wrist positions (for wave detection)
-    wrist_x = wrist.x
-    wrist_positions.append(wrist_x)
+    # Update wrist positions for wave detection.
+    wrist_positions.append(wrist.x)
 
-    # Check "How" gesture (thumb + fingers curved)
+    # "How" gesture: thumb and all fingers curved.
     thumb_curved = thumb_tip.y > wrist.y and thumb_tip.x > index_tip.x
     fingers_curved = all(tip.y > wrist.y for tip in [index_tip, middle_tip, ring_tip, pinky_tip])
+    # "You" gesture: index finger pointing.
+    is_pointing = (index_tip.y < middle_tip.y and
+                   index_tip.y < ring_tip.y and
+                   index_tip.y < pinky_tip.y and
+                   abs(index_tip.x - thumb_tip.x) > 0.1)
 
-    # Check "You" gesture (index finger pointing)
-    is_pointing = (
-        index_tip.y < middle_tip.y
-        and index_tip.y < ring_tip.y
-        and index_tip.y < pinky_tip.y
-        and abs(index_tip.x - thumb_tip.x) > 0.1
-    )
-
-    # Check for wave ("Hello!")
+    # Detect wave for "Hello!"
     if len(wrist_positions) >= 5:
         direction_changes = 0
         total_movement = 0
@@ -84,7 +142,6 @@ def recognize_gesture(hand_landmarks, handedness, sequence_state):
             if sequence_state is None:
                 return "Hello!"
 
-    # Priority for "How" and "You"
     if thumb_curved and fingers_curved:
         return "How"
     elif is_pointing:
@@ -94,11 +151,10 @@ def recognize_gesture(hand_landmarks, handedness, sequence_state):
 def run_realtime_detection():
     """
     Runs a loop to capture video from your webcam,
-    detects gestures using Mediapipe, and shows the frames in Streamlit.
+    detects letters (A-E) or gestures ("How", "You", "Hello!") using Mediapipe,
+    and shows the frames in Streamlit.
     Press the 'Stop Gesture Detection' button to end.
     """
-
-    # A placeholder for video frames
     frame_placeholder = st.empty()
 
     cap = cv2.VideoCapture(0)
@@ -106,7 +162,6 @@ def run_realtime_detection():
         st.error("Could not open webcam. Make sure it's connected and accessible.")
         return
 
-    # We'll store the last recognized gesture and a timestamp to keep it on screen
     last_gesture = None
     last_gesture_time = 0.0
     display_duration = 3.0  # seconds to display the last recognized gesture
@@ -117,7 +172,6 @@ def run_realtime_detection():
     st.write("**Real-time gesture detection running...**")
     st.write("Click '**Stop Gesture Detection**' in the sidebar to quit.")
 
-    # Add a stop button in the sidebar (we'll poll its state in the loop)
     if "stop_detection" not in st.session_state:
         st.session_state["stop_detection"] = False
 
@@ -130,7 +184,6 @@ def run_realtime_detection():
         if not ret:
             break
 
-        # Convert frame to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = hands.process(rgb_frame)
 
@@ -139,15 +192,12 @@ def run_realtime_detection():
                 handedness = results.multi_handedness[idx].classification[0].label
                 mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-                # Recognize gesture
                 gesture = recognize_gesture(hand_landmarks, handedness, sequence_state)
                 if gesture != "Unknown":
-                    # If different from last, update
                     if gesture != last_gesture:
                         last_gesture = gesture
                         last_gesture_time = time.time()
 
-                    # Check sequences
                     if gesture == "How":
                         sequence_state = "How"
                     elif sequence_state == "How" and gesture == "You":
@@ -158,24 +208,20 @@ def run_realtime_detection():
                     elif gesture == "Hello!":
                         sequence_state = None
 
-        # Draw the last recognized gesture text on the frame if still within duration
         if last_gesture and (time.time() - last_gesture_time < display_duration):
             cv2.putText(
                 frame,
                 last_gesture,
-                (30, 60),  # position
+                (30, 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                1.2,  # font scale
+                1.2,
                 (0, 255, 0),
                 3,
                 cv2.LINE_AA
             )
 
-        # Convert back to RGB for display in Streamlit
         display_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_placeholder.image(display_frame, channels="RGB")
-
-        # Small delay so we don't hog all resources
         time.sleep(0.03)
 
     cap.release()

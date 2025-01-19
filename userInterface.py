@@ -367,16 +367,16 @@ def main():
         st.header("Camera Translation")
 
         # Button to start real-time detection
-        if st.button("Start Real-time Gesture Detection"):
-            run_realtime_detection()
+       # if st.button("Start Real-time Gesture Detection"):
+        run_realtime_detection()
 
-        # Existing single-image approach (unchanged)
-        st.write("Or capture a snapshot using your device camera:")
-        camera_image = st.camera_input("Take a picture")
-        if camera_image:
-            image = Image.open(camera_image)
-            st.image(image, caption="Captured Image", use_column_width=True)
-            st.success("Detected gesture: (placeholder)")
+        # # Existing single-image approach (unchanged)
+        # st.write("Or capture a snapshot using your device camera:")
+        # camera_image = st.camera_input("Take a picture")
+        # if camera_image:
+        #     image = Image.open(camera_image)
+        #     st.image(image, caption="Captured Image", use_column_width=True)
+        #     st.success("Detected gesture: (placeholder)")
         
         st.write(" ")
         st.write(" ")

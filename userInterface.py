@@ -4,8 +4,12 @@ import requests
 import re
 import io
 import uuid
-from PIL import Image
+import cv2
+import mediapipe as mp
 import numpy as np
+from PIL import Image
+from collections import deque
+
 from groq import Groq
 
 # Set page configuration at the very top.
@@ -26,6 +30,157 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
+###############################################################################
+# Mediapipe Setup for Real-Time Gesture Detection
+###############################################################################
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=2,
+    min_detection_confidence=0.5
+)
+mp_drawing = mp.solutions.drawing_utils
+
+# For wave detection, track wrist positions
+wrist_positions = deque(maxlen=20)
+
+def recognize_gesture(hand_landmarks, handedness, sequence_state):
+    # Extract key landmarks
+    thumb_tip = hand_landmarks.landmark[4]
+    index_tip = hand_landmarks.landmark[8]
+    middle_tip = hand_landmarks.landmark[12]
+    ring_tip = hand_landmarks.landmark[16]
+    pinky_tip = hand_landmarks.landmark[20]
+    wrist = hand_landmarks.landmark[0]
+
+    # Track wrist positions (for wave detection)
+    wrist_x = wrist.x
+    wrist_positions.append(wrist_x)
+
+    # Check "How" gesture (thumb + fingers curved)
+    thumb_curved = thumb_tip.y > wrist.y and thumb_tip.x > index_tip.x
+    fingers_curved = all(tip.y > wrist.y for tip in [index_tip, middle_tip, ring_tip, pinky_tip])
+
+    # Check "You" gesture (index finger pointing)
+    is_pointing = (
+        index_tip.y < middle_tip.y
+        and index_tip.y < ring_tip.y
+        and index_tip.y < pinky_tip.y
+        and abs(index_tip.x - thumb_tip.x) > 0.1
+    )
+
+    # Check for wave ("Hello!")
+    if len(wrist_positions) >= 5:
+        direction_changes = 0
+        total_movement = 0
+        for i in range(1, len(wrist_positions)):
+            movement = abs(wrist_positions[i] - wrist_positions[i - 1])
+            total_movement += movement
+            if i > 1 and (wrist_positions[i] - wrist_positions[i - 1]) * (wrist_positions[i - 1] - wrist_positions[i - 2]) < 0:
+                direction_changes += 1
+        if direction_changes >= 4 and total_movement >= 0.2:
+            wrist_positions.clear()
+            if sequence_state is None:
+                return "Hello!"
+
+    # Priority for "How" and "You"
+    if thumb_curved and fingers_curved:
+        return "How"
+    elif is_pointing:
+        return "You"
+    return "Unknown"
+
+def run_realtime_detection():
+    """
+    Runs a loop to capture video from your webcam,
+    detects gestures using Mediapipe, and shows the frames in Streamlit.
+    Press the 'Stop Gesture Detection' button to end.
+    """
+
+    # A placeholder for video frames
+    frame_placeholder = st.empty()
+
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        st.error("Could not open webcam. Make sure it's connected and accessible.")
+        return
+
+    # We'll store the last recognized gesture and a timestamp to keep it on screen
+    last_gesture = None
+    last_gesture_time = 0.0
+    display_duration = 3.0  # seconds to display the last recognized gesture
+
+    gesture_sequence = deque(maxlen=5)
+    sequence_state = None
+
+    st.write("**Real-time gesture detection running...**")
+    st.write("Click '**Stop Gesture Detection**' in the sidebar to quit.")
+
+    # Add a stop button in the sidebar (we'll poll its state in the loop)
+    if "stop_detection" not in st.session_state:
+        st.session_state["stop_detection"] = False
+
+    stop_btn = st.sidebar.button("Stop Gesture Detection")
+    if stop_btn:
+        st.session_state["stop_detection"] = True
+
+    while cap.isOpened() and not st.session_state["stop_detection"]:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Convert frame to RGB
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = hands.process(rgb_frame)
+
+        if results.multi_hand_landmarks:
+            for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+                handedness = results.multi_handedness[idx].classification[0].label
+                mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+                # Recognize gesture
+                gesture = recognize_gesture(hand_landmarks, handedness, sequence_state)
+                if gesture != "Unknown":
+                    # If different from last, update
+                    if gesture != last_gesture:
+                        last_gesture = gesture
+                        last_gesture_time = time.time()
+
+                    # Check sequences
+                    if gesture == "How":
+                        sequence_state = "How"
+                    elif sequence_state == "How" and gesture == "You":
+                        last_gesture = "How are you?"
+                        last_gesture_time = time.time()
+                        sequence_state = None
+                        gesture_sequence.clear()
+                    elif gesture == "Hello!":
+                        sequence_state = None
+
+        # Draw the last recognized gesture text on the frame if still within duration
+        if last_gesture and (time.time() - last_gesture_time < display_duration):
+            cv2.putText(
+                frame,
+                last_gesture,
+                (30, 60),  # position
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.2,  # font scale
+                (0, 255, 0),
+                3,
+                cv2.LINE_AA
+            )
+
+        # Convert back to RGB for display in Streamlit
+        display_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_placeholder.image(display_frame, channels="RGB")
+
+        # Small delay so we don't hog all resources
+        time.sleep(0.03)
+
+    cap.release()
+    st.session_state["stop_detection"] = False
+    st.write("Real-time gesture detection stopped.")
 
 ###############################################################################
 # 1) BSL “Simplification” with Groq
@@ -58,7 +213,7 @@ Now convert this sentence:
     if st.session_state.get("debug", False):
         st.write("[DEBUG] BSL Simplify Prompt:", prompt)
 
-    response = client.chat.completions.create(
+    client_response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",  # Use your preferred Groq text model
         messages=[
             {"role": "system", "content": "You are a helpful assistant that converts English sentences into BSL-friendly keywords."},
@@ -70,9 +225,10 @@ Now convert this sentence:
         stop=None,
         stream=False
     )
-    simplified_text = response.choices[0].message.content.strip()
+    simplified_text = client_response.choices[0].message.content.strip()
     if st.session_state.get("debug", False):
         st.write("[DEBUG] Groq returned simplified text:", simplified_text)
+
     keywords = [w.strip().lower() for w in re.split(r"[,\n]+", simplified_text) if w.strip()]
     return keywords[:max_keywords]
 
@@ -130,6 +286,7 @@ def process_text_bsl(client, raw_text):
     bsl_words = bsl_simplify_with_groq(client, raw_text)
     if st.session_state.get("debug", False):
         st.write("[DEBUG] BSL words:", bsl_words)
+
     results = []
     for word in bsl_words:
         url = get_video_url(word)
@@ -152,8 +309,10 @@ def process_text_bsl(client, raw_text):
                 results.append({"word": display_text, "url": found_alt})
             else:
                 results.append({"word": f"{word} (no sign)", "url": None})
+
     if st.session_state.get("debug", False):
         st.write("[DEBUG] Final BSL video items:", results)
+
     return results
 
 ###############################################################################
@@ -188,7 +347,7 @@ def main():
         st.session_state["debug"] = False
 
     # Replace with your actual Groq API key.
-    api_key = "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"
+    api_key = "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"
     client = Groq(api_key=api_key)
 
     # Initialize session state for BSL videos and index if needed.
@@ -206,7 +365,13 @@ def main():
     # --- Camera Translation Page ---
     if page == "Camera Translation":
         st.header("Camera Translation")
-        st.write("Capture your ASL gesture using your device camera (placeholder).")
+
+        # Button to start real-time detection
+        if st.button("Start Real-time Gesture Detection"):
+            run_realtime_detection()
+
+        # Existing single-image approach (unchanged)
+        st.write("Or capture a snapshot using your device camera:")
         camera_image = st.camera_input("Take a picture")
         if camera_image:
             image = Image.open(camera_image)
@@ -217,6 +382,8 @@ def main():
     elif page == "Speech Translation":
         st.header("Speech Translation")
         st.write("Record a voice message, transcribe with Groq, and generate BSL video items.")
+
+        # Existing speech logic remains the same
         audio_file = st.audio_input("Record a voice message")
         if audio_file is not None:
             st.write("### Playback of your recording:")
@@ -283,7 +450,6 @@ def main():
             final_url = f"{url}?nocache={unique_param}"
             if st.session_state.get("debug"):
                 st.write("[DEBUG] Final video URL:", final_url)
-            # Here we simply use st.video(); our custom CSS will only affect the carousel if needed.
             st.video(final_url, format="video/mp4")
         else:
             st.error(f"No BSL video available for '{word}'.")

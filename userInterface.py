@@ -9,6 +9,7 @@ import mediapipe as mp
 import numpy as np
 from PIL import Image
 from collections import deque
+import toml
 
 from groq import Groq
 
@@ -452,7 +453,13 @@ def main():
         st.session_state["debug"] = False
 
     # Replace with your actual Groq API key.
-    api_key = "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"
+    # Load the configuration file
+    with open("config.toml", "r") as config_file:   
+        config = toml.load(config_file)
+
+
+    # Access the API key
+    api_key = config["api"]["key"]
     client = Groq(api_key=api_key)
 
     # Initialize session state for BSL videos and index if needed.
